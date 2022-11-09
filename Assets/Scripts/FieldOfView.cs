@@ -9,39 +9,28 @@ using UnityEngine;
 /// </summary>
 public class FieldOfView : MonoBehaviour
 {
-    public float viewRadius;
+    public float viewRadius = 2f;
+    public float audioRadius = 10f;
     [Range(0, 360)]
-    public float viewAngle;
-
-    public LayerMask allyMask;
-    public LayerMask enemyMask;
-
-    public List<Transform> validTargets = new List<Transform>();
+    public float viewAngle = 130f;
+    public LayerMask redMask = 8;
+    public LayerMask blueMask = 9;
     public Transform closestTarget;
-
-    void Start()
-    {
-        // Kick off the vision detection coroutine
-        StartCoroutine("TargetFinderCoroutine", 0.2f);
-    }
-
-    // Every 0.2 seconds, look for enemies
-    IEnumerator TargetFinderCoroutine(float delay)
-    {
-        while(true) {
-            yield return new WaitForSeconds(delay);
-            FindTargets();
-        }
-    }
+    public float dstToClosest = 999999f;
+    public List<Transform> validTargets = new List<Transform>();
+    public int deathToll = 0; // Signals broadcast by soldiers when they die
 
     // Find all enemies in this soldier's field of view
     // Dear god this is going to cook my PC 
-    void FindTargets()
+    public void FindTargets(LayerMask allyMask, LayerMask enemyMask)
     {
         validTargets.Clear();
+        closestTarget = null;
+        dstToClosest = 999999f;
         // Get every target within our set view radius
         Collider[] targetsInViewRadius = Physics.OverlapSphere(transform.position, viewRadius, enemyMask);
 
+        bool firstValid = false;
         // For each target in the radius
         for (int i = 0; i < targetsInViewRadius.Length; i++)
         {
@@ -50,45 +39,89 @@ public class FieldOfView : MonoBehaviour
 
             // Get the direction to the target
             Vector3 dirToTarget = (target.position - transform.position).normalized;
-            dirToTarget = Quaternion.AngleAxis(-90, Vector3.up) * dirToTarget;
-
+            // dirToTarget = Quaternion.AngleAxis(-90, Vector3.up) * dirToTarget;
+            
             // If the direction to the target is within the field of view of this soldier
             if (Vector3.Angle(transform.forward, dirToTarget) < viewAngle / 2)
             {
                 float dstToTarget = FindDistance(target);
                 if (!Physics.Raycast(transform.position, dirToTarget, dstToTarget, allyMask))
                 {
+                    if (firstValid)
+                    {
+                        closestTarget = target;
+                        dstToClosest = dstToTarget;
+                        firstValid = false;
+                    }
+                    else if (dstToTarget < dstToClosest)
+                    {
+                        closestTarget = target;
+                        dstToClosest = dstToTarget;
+                    }
                     validTargets.Add(target);
-                    Debug.Log("ENEMY SPOTTED");
-                }
-            }
-        }
-
-        // Only execute if there are 2 or more valid targets
-        if (validTargets.Count > 1)
-        {
-            // Set the closest target as the first valid target and get its distance to this soldier
-            closestTarget = validTargets[0];
-            float closestDistance = FindDistance(closestTarget);
-
-            // For each valid target
-            for (int i = 1; i < validTargets.Count; i++)
-            {
-                // Get this target's distance
-                float currentDistance = FindDistance(validTargets[i]);
-
-                // If this target is closer than the current closest it becomes the closest
-                if (currentDistance < closestDistance)
-                {
-                    currentDistance = closestDistance;
-                    closestTarget = validTargets[i];
                 }
             }
         }
     }
 
+    /// <summary>
+    /// Finds all detectable signals and stores them as returnable values
+    /// </summary>
+    /// <param name="allyMask"> Allies to detect </param>
+    /// <returns> The best signal to follow </returns>
+    public GameObject FindSignals(LayerMask allyMask)
+    {
+        GameObject bestSignal = null;
+        deathToll = 0;
+
+        // Get every ally within our set view radius
+        Collider[] targetsInViewRadius = Physics.OverlapSphere(transform.position, audioRadius, allyMask);
+
+        // For each ally in the radius
+        for (int i = 0; i < targetsInViewRadius.Length; i++)
+        {
+
+            // Get the transform of the target
+            Transform target = targetsInViewRadius[i].transform;
+
+            // Get the direction to the target
+            Vector3 dirToTarget = (target.position - transform.position).normalized;
+            // dirToTarget = Quaternion.AngleAxis(-90, Vector3.up) * dirToTarget;
+            float dstToTarget = FindDistance(target);
+            float closestSig = -1f;
+
+            if (target.gameObject.GetComponent<SignalHandler>() != null && target.gameObject.GetComponent<SignalHandler>().isBroadcasting)
+            {
+                int tgt = (int)target.gameObject.GetComponent<SignalHandler>().currentSignal;
+                // Set the best signal if there is none
+                if (bestSignal == null)
+                {
+                    bestSignal = target.gameObject;
+                    closestSig = dstToTarget;
+                }
+                else
+                {
+                    int best = (int)bestSignal.GetComponent<SignalHandler>().currentSignal;
+                    // If the current best signal is lower priority than the current signal, target is the new best
+                    if (best > tgt)
+                        bestSignal = target.gameObject;
+                    // If they're equal, choose the closest
+                    else if (best == tgt)
+                        if (dstToTarget < closestSig)
+                        {
+                            bestSignal = target.gameObject;
+                            closestSig = dstToTarget;
+                        }
+                }
+                if (tgt == 2) deathToll++;
+            }
+
+        }
+        return bestSignal;
+    }
+
     // Gets the distance between a target transform and this soldier
-    float FindDistance(Transform target)
+    public float FindDistance(Transform target)
     {
         return Vector3.Distance(transform.position, target.position);
     }
